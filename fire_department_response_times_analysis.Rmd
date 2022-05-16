@@ -1,0 +1,194 @@
+---
+title: "Fire Department Response Times"
+author: "Nakai Zemer"
+date: '2022-05-12'
+output: html_document
+bibliography: "references.bib"
+link_citations: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("stringr")
+library("tidyverse")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("plotly")
+library("factoextra")
+library("tidyr")
+```
+
+## Introduction:
+
+Faster incident response is better, right? Logic would dictate that the faster a unit can respond, the better the outcome of the an incident, structure fire or EMS call. NFPA standards agree with this statement in the context of structure fires. The NFPA 1710 specifies in section A.4.1.2.1(3) that fire departments should "consistently meet a 240-second travel time for for the initial company fire suppression response; for other than high-rise, a 480-second travel time for the full alarm fire response assignment; and for high-rise, a 610-second travel time for the full alarm fire response assignment." [@nfpa_1710]. This analysis serves to consider several questions related to response times for fire departments in the United States and develop attainable, incident outcome improving target response times for Cobb County Fire and Emergency Services in Georgia, USA.
+
+## Research Questions:
+How do U.S. agency response times compare to NFPA standards?
+<br>
+How do CCFES response times rank among comparable agencies?
+<br>
+What factors influence the relationship between response time and incident outcomes for different incident type categories?
+<br>
+What are attainable, incident outcome improving target response times for each incident category for each agency type?
+<br>
+What procedures can be developed to improve incident outcomes?
+
+
+## Data Processing Methodology:
+
+1. Download and import FEMA fire department incident data into RStudio for pre-processing.
+
+2. Cluster fire agencies into different categories. (e.g., Urban, Suburban, Rural, Large, Medium, Small, etc.) There may be data already in existence that classifies agencies by size or type. It may be useful to consider ratios such as stations to calls, serving population, calls per year, etc. Consider models such as random forest, k-means, etc.
+
+3. Cluster incident types into different categories. (e.g., Structure Fire, EMS, Urgent, Non-urgent, etc.) Use existing categories or create new categories if necessary. It may be useful to take into account emergency vs non-emergency incident approaches. Consider models such as random forest, k-means, etc.
+
+4. Compute response time statistics based on agency and incident categories.
+
+5. Find correlations between influencing factors and response times.
+
+6. Find correlations between response times and incident outcomes by incident category.
+
+
+## Initial Research:
+
+[@response_times_outcomes]
+
+
+## Data Source:
+
+All data was sourced from FEMA's website. The data format consisted of zipped files containing structured flat files. Each flat file corresponded to a module in the NFIRS form used to create an incident report. Years 2014 through 2020 contain all incident reports, while years 2010 through 2013 contain only fire and hazmat incident reports.
+
+
+## Data Import:
+
+```{r process_data, eval=FALSE, include=FALSE}
+
+source_directory <- "./datasets/nfirs/unprocessed"
+
+# create a data frame with all file paths within the source directory
+
+file_path_df <-  data.frame(file_path = list.files(source_directory, 
+                                    pattern = ".txt", 
+                                    all.files = FALSE, 
+                                    full.names = TRUE, 
+                                    recursive = TRUE)) %>%
+  rowwise() %>%
+  mutate(parent_dir = dirname(file_path),
+         year = str_sub(parent_dir, -4, -1),
+         table_name = tools::file_path_sans_ext(basename(file_path))) %>%
+  arrange(table_name, year)
+
+# process and save flat files to drive to save on ram usage
+i <- 1
+max_i <- nrow(file_path_df)
+
+for(i in 1:max_i) {
+  to <- paste0("./datasets/nfirs/rds/", file_path_df$table_name[i], "_", file_path_df$year[i], ".rds")
+  if (file.exists(to)) {
+    print(paste0(to, " already exists! Skipping..."))
+  } else {
+    df <- read.csv(file_path_df$file_path[i], sep = "^", quote = "\"")
+    print(paste0("Saving ", file_path_df$table_name[i], "_", file_path_df$year[i], " to /datasets/nfirs/rds/..."))
+    saveRDS(df, file = to)
+    print(paste0(file_path_df$table_name[i], "_", file_path_df$year[i], " saved!"))
+  }
+}
+
+
+```
+
+
+## Import Fire Department Data
+
+```{r}
+
+fd_df <- read.csv("datasets/nfirs/fire_departments/usfa-registry-national.txt") %>%
+  rename(STATE = HQ.state)
+
+ccfes_df <- fd_df %>%
+  filter(Fire.dept.name == "Cobb County Fire & Emergency Services")
+
+```
+
+
+## Import and Merge Basic Incident Files 
+
+```{r}
+
+basic_incident_2014_df <- readRDS("datasets/nfirs/rds/basicincident_2014.rds")
+basic_incident_2015_df <- readRDS("datasets/nfirs/rds/basicincident_2015.rds")
+basic_incident_2016_df <- readRDS("datasets/nfirs/rds/basicincident_2016.rds")
+basic_incident_2017_df <- readRDS("datasets/nfirs/rds/basicincident_2017.rds")
+
+```
+
+
+
+## Data Processing:
+
+```{r}
+basic_incident_2014_df <- basic_incident_2014_df %>%
+  mutate(INC_DATE = as.Date(INC_DATE, format = "%m%d%Y"),
+         ALARM = as.Date(ALARM, format = "%m%d%Y%H%M"),
+         ARRIVAL = as.Date(ARRIVAL, format = "%m%d%Y%H%M"))
+
+as.POSIXct(strptime(basic_incident_2014_df$INC_DATE[1], format = "%m%d%Y"))
+as.POSIXct(strptime(basic_incident_2014_df$INC_DATE[1], format = "%m%m%d%Y%H%M"))
+
+
+incident_counts_df <- basic_incident_2014_df %>%
+  count(STATE, FDID, INC_TYPE, sort = TRUE)
+  
+incident_counts_df <- inner_join(fd_df, incident_counts_df)
+
+incident_counts_df <- incident_counts_df %>%
+  select(state = STATE, fdid = FDID, name = Fire.dept.name, dept_type = Dept.Type, org_type = Organization.Type, 
+         n_station = Number.Of.Stations, n_volunteer_ff = Active.Firefighters...Volunteer, n_career_ff = Active.Firefighters...Career, 
+         n_ppc_ff = Active.Firefighters...Paid.per.Call, n_career_civ = Non.Firefighting...Civilian, n_volunteer_civ = Non.Firefighting...Volunteer,
+         primary_agency_for_emergency_mgmt = Primary.agency.for.emergency.mgmt, incident_type = INC_TYPE, n_calls = n)
+
+```
+
+## Data Exploration:
+
+Exploring relationships between fire department variables and calls
+
+```{r}
+
+inci_type_111_df <- incident_counts_df %>%
+  mutate(n_ff = n_career_ff + n_volunteer_ff,
+         calls_per_ff = n_calls / n_ff) %>%
+  filter(incident_type == 111
+         #,n_calls < 500,
+         #n_ff < 500
+         )
+  
+
+p <- ggplot(inci_type_111_df, aes(x = n_calls, y = n_ff, color = dept_type, text = name)) +
+  geom_point(alpha = 1/3)
+
+p <- ggplot(inci_type_111_df, aes(color = dept_type, x = calls_per_ff)) +
+  geom_histogram()
+
+  geom_bar(stat = "identity")
+
+ggplotly(p)
+
+```
+
+
+
+## K-Means for Department Clustering
+
+```{r}
+
+```
+
+
+
+## References:
+
+NFIRS Data Dictionay
+https://www.usfa.fema.gov/downloads/pdf/nfirs/NFIRS_Spec_2015.pdf
+https://www.usfa.fema.gov/downloads/pdf/nfirs/NFIRS_Spec_2009.pdf
