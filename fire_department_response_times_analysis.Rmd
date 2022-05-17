@@ -128,29 +128,62 @@ basic_incident_2017_df <- readRDS("datasets/nfirs/rds/basicincident_2017.rds")
 ## Data Processing:
 
 ```{r}
-basic_incident_2014_df <- basic_incident_2014_df %>%
-  mutate(INC_DATE = as.Date(INC_DATE, format = "%m%d%Y"),
-         ALARM = as.Date(ALARM, format = "%m%d%Y%H%M"),
-         ARRIVAL = as.Date(ARRIVAL, format = "%m%d%Y%H%M"))
+basic_incident_df_2 <- basic_incident_2014_df %>%
+  mutate(INC_DATE = case_when(nchar(INC_DATE) == 7 ~ as.POSIXct(strptime(paste0("0", INC_DATE), format = "%m%d%Y")),
+                              TRUE ~ as.POSIXct(strptime(INC_DATE, format = "%m%d%Y"))),
+         ALARM = case_when(nchar(ALARM) == 11 ~ as.POSIXct(strptime(paste0("0", ALARM), format = "%m%d%Y%H%M")),
+                              TRUE ~ as.POSIXct(strptime(ALARM, format = "%m%d%Y%H%M"))),
+         ARRIVAL = case_when(nchar(ARRIVAL) == 11 ~ as.POSIXct(strptime(paste0("0", ARRIVAL), format = "%m%d%Y%H%M")),
+                              TRUE ~ as.POSIXct(strptime(ARRIVAL, format = "%m%d%Y%H%M"))),
+         LU_CLEAR = case_when(nchar(LU_CLEAR) == 11 ~ as.POSIXct(strptime(paste0("0", LU_CLEAR), format = "%m%d%Y%H%M")),
+                              TRUE ~ as.POSIXct(strptime(LU_CLEAR, format = "%m%d%Y%H%M"))))
 
-as.POSIXct(strptime(basic_incident_2014_df$INC_DATE[1], format = "%m%d%Y"))
-as.POSIXct(strptime(basic_incident_2014_df$INC_DATE[1], format = "%m%m%d%Y%H%M"))
+saveRDS(basic_incident_df_2, file = "./datasets/nfirs/rds/basicincident_2014.rds")
 
 
-incident_counts_df <- basic_incident_2014_df %>%
+incident_type_counts_df <- basic_incident_2017_df %>%
   count(STATE, FDID, INC_TYPE, sort = TRUE)
+
+incident_counts_df <- basic_incident_2017_df %>%
+  count(STATE, FDID, sort = TRUE)
   
+incident_type_counts_df <- inner_join(fd_df, incident_type_counts_df)
 incident_counts_df <- inner_join(fd_df, incident_counts_df)
 
-incident_counts_df <- incident_counts_df %>%
+incident_type_counts_df <- incident_type_counts_df %>%
   select(state = STATE, fdid = FDID, name = Fire.dept.name, dept_type = Dept.Type, org_type = Organization.Type, 
          n_station = Number.Of.Stations, n_volunteer_ff = Active.Firefighters...Volunteer, n_career_ff = Active.Firefighters...Career, 
          n_ppc_ff = Active.Firefighters...Paid.per.Call, n_career_civ = Non.Firefighting...Civilian, n_volunteer_civ = Non.Firefighting...Volunteer,
          primary_agency_for_emergency_mgmt = Primary.agency.for.emergency.mgmt, incident_type = INC_TYPE, n_calls = n)
 
+incident_counts_df <- incident_counts_df %>%
+  select(state = STATE, fdid = FDID, name = Fire.dept.name, dept_type = Dept.Type, org_type = Organization.Type, 
+         n_station = Number.Of.Stations, n_volunteer_ff = Active.Firefighters...Volunteer, n_career_ff = Active.Firefighters...Career, 
+         n_ppc_ff = Active.Firefighters...Paid.per.Call, n_career_civ = Non.Firefighting...Civilian, n_volunteer_civ = Non.Firefighting...Volunteer,
+         primary_agency_for_emergency_mgmt = Primary.agency.for.emergency.mgmt, n_calls = n)
+
 ```
 
 ## Data Exploration:
+
+Call Count Histogram
+
+```{r}
+
+df <- incident_counts_df %>%
+  mutate(n_ff = n_career_ff + n_volunteer_ff + n_ppc_ff,
+         calls_per_ff = n_calls / n_ff) %>%
+  filter(n_calls > 0)
+
+summary(df)
+
+p <- ggplot(df, aes(color = dept_type, x = calls_per_ff)) +
+  geom_histogram()
+
+ggplotly(p)
+
+```
+
 
 Exploring relationships between fire department variables and calls
 
@@ -163,6 +196,9 @@ inci_type_111_df <- incident_counts_df %>%
          #,n_calls < 500,
          #n_ff < 500
          )
+
+incident_counts_df %>%
+  sum()
   
 
 p <- ggplot(inci_type_111_df, aes(x = n_calls, y = n_ff, color = dept_type, text = name)) +
