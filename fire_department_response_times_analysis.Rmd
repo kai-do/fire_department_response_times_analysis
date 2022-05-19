@@ -10,13 +10,19 @@ link_citations: true
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library("stringr")
+library("tools")
 library("tidyverse")
-library("readr")
+library("data.table")
 library("dplyr")
 library("ggplot2")
 library("plotly")
 library("factoextra")
 library("tidyr")
+library("microbenchmark")
+library("fst")
+library("foreign")
+library("foreach")
+library("doParallel")
 ```
 
 ## Introduction:
@@ -64,36 +70,63 @@ All data was sourced from FEMA's website. The data format consisted of zipped fi
 
 ```{r process_data, eval=FALSE, include=FALSE}
 
-source_directory <- "./datasets/nfirs/unprocessed"
+source_directory <- "C:/Users/ZemerN036438/OneDrive - Cobb County Government/NFIRS/unprocessed"
 
 # create a data frame with all file paths within the source directory
 
 file_path_df <-  data.frame(file_path = list.files(source_directory, 
-                                    pattern = ".txt", 
+                                    pattern =   NULL, 
                                     all.files = FALSE, 
                                     full.names = TRUE, 
                                     recursive = TRUE)) %>%
   rowwise() %>%
   mutate(parent_dir = dirname(file_path),
          year = str_sub(parent_dir, -4, -1),
-         table_name = tools::file_path_sans_ext(basename(file_path))) %>%
+         table_name = tools::file_path_sans_ext(basename(file_path)),
+         file_type = file_ext(file_path)) %>%
   arrange(table_name, year)
 
 # process and save flat files to drive to save on ram usage
+
+
+bm <- microbenchmark(
+  "fread_1" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 1, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_2" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 2, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_4" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 4, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_6" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 6, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_8" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 8, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_10" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 10, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_12" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 12, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_14" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 14, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_16" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 16, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE),
+  "fread_18" = fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 18, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE)
+)
+
+autoplot(bm)
+
+
 i <- 1
 max_i <- nrow(file_path_df)
 
 for(i in 1:max_i) {
-  to <- paste0("./datasets/nfirs/rds/", file_path_df$table_name[i], "_", file_path_df$year[i], ".rds")
+  to <- paste0("./datasets/nfirs/fst/", file_path_df$table_name[i], "_", file_path_df$year[i], ".fst")
   if (file.exists(to)) {
     print(paste0(to, " already exists! Skipping..."))
   } else {
-    df <- read.csv(file_path_df$file_path[i], sep = "^", quote = "\"")
-    print(paste0("Saving ", file_path_df$table_name[i], "_", file_path_df$year[i], " to /datasets/nfirs/rds/..."))
-    saveRDS(df, file = to)
+    print(paste0("Reading ", file_path_df$file_path[i], "..."))
+    if (file_path_df$file_type[i] == "csv") {
+      df <- fread(file = file_path_df$file_path[i], sep = ",", quote = "\"", nThread = 12,
+                keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE)
+    } else if (file_path_df$file_type[i] == "txt") {
+      df <- fread(file = file_path_df$file_path[i], sep = "^", quote = "\"", nThread = 12,
+                keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE)
+    }
+    print(paste0("Saving ", file_path_df$table_name[i], "_", file_path_df$year[i], " to /datasets/nfirs/fst/..."))
+    fst::write.fst(df, path = to)
     print(paste0(file_path_df$table_name[i], "_", file_path_df$year[i], " saved!"))
   }
 }
+
 
 
 ```
@@ -103,58 +136,88 @@ for(i in 1:max_i) {
 
 ```{r}
 
-fd_df <- read.csv("datasets/nfirs/fire_departments/usfa-registry-national.txt") %>%
-  rename(STATE = HQ.state)
+fd_df <- fread(file = "datasets/nfirs/fire_departments/usfa-registry-national.txt", sep = ",", quote = "\"", 
+               nThread = 12, keepLeadingZeros = TRUE, strip.white = TRUE, showProgress = TRUE) %>%
+  rename(STATE = `HQ state`)
 
 ccfes_df <- fd_df %>%
-  filter(Fire.dept.name == "Cobb County Fire & Emergency Services")
+  filter(`Fire dept name` == "Cobb County Fire & Emergency Services")
 
 ```
 
 
-## Import and Merge Basic Incident Files 
+## Import and Convert Dates on Basic Incident Files 
 
 ```{r}
 
-basic_incident_2014_df <- readRDS("datasets/nfirs/rds/basicincident_2014.rds")
-basic_incident_2015_df <- readRDS("datasets/nfirs/rds/basicincident_2015.rds")
-basic_incident_2016_df <- readRDS("datasets/nfirs/rds/basicincident_2016.rds")
-basic_incident_2017_df <- readRDS("datasets/nfirs/rds/basicincident_2017.rds")
+#basic_incident_df <- fst::read.fst("./datasets/nfirs/fst/basicincident_2014.fst")
+
+basic_incident_df <- fst::read.fst("./datasets/nfirs/fst/basicincident_dates_2014.fst")
+
+#basic_incident_df$INC_DATE <- as.POSIXct(strptime(basic_incident_df$INC_DATE, format = "%m%d%Y"))
+#basic_incident_df$ALARM <- as.POSIXct(strptime(basic_incident_df$ALARM, format = "%m%d%Y%H%M"))
+#basic_incident_df$ARRIVAL <- as.POSIXct(strptime(basic_incident_df$ARRIVAL, format = "%m%d%Y%H%M"))
+#basic_incident_df$LU_CLEAR <- as.POSIXct(strptime(basic_incident_df$LU_CLEAR, format = "%m%d%Y%H%M"))
+#
+#fst::write.fst(basic_incident_df, path = "./datasets/nfirs/fst/basicincident_dates_2014.fst")
+#
+#test1 <- as.POSIXct(strptime(basic_incident_df$INC_DATE[1], format = "%m%d%Y"))
+#
+#mutate(INC_DATE = as.POSIXct(strptime(INC_DATE, format = "%m%d%Y")),
+#         ALARM = as.POSIXct(strptime(ALARM, format = "%m%d%Y%H%M")),
+#         ARRIVAL = as.POSIXct(strptime(ARRIVAL, format = "%m%d%Y%H%M")),
+#         LU_CLEAR = as.POSIXct(strptime(LU_CLEAR, format = "%m%d%Y%H%M")))
 
 ```
 
+## Alarm Times
+
+```{r}
+
+alarm_to_arrival_df <- basic_incident_df %>%
+  mutate(alarm_to_arrival_time = as.numeric(difftime(ARRIVAL, ALARM))) %>%
+  filter(alarm_to_arrival_time >= 0,
+         alarm_to_arrival_time <= 1800)
+
+hist <- ggplot(alarm_to_arrival_df, aes(x = alarm_to_arrival_time)) +
+  geom_histogram()
+
+density <- ggplot(alarm_to_arrival_df, aes(x = alarm_to_arrival_time)) +
+  geom_density() +
+  geom_vline(aes(xintercept = mean(alarm_to_arrival_time)),
+            color = "blue", linetype = "dashed", size = 1)
+
+ggplotly(density)
+
+```
 
 
 ## Data Processing:
 
 ```{r}
-basic_incident_df_2 <- basic_incident_2014_df %>%
-  mutate(INC_DATE = case_when(nchar(INC_DATE) == 7 ~ as.POSIXct(strptime(paste0("0", INC_DATE), format = "%m%d%Y")),
-                              TRUE ~ as.POSIXct(strptime(INC_DATE, format = "%m%d%Y"))),
-         ALARM = case_when(nchar(ALARM) == 11 ~ as.POSIXct(strptime(paste0("0", ALARM), format = "%m%d%Y%H%M")),
-                              TRUE ~ as.POSIXct(strptime(ALARM, format = "%m%d%Y%H%M"))),
-         ARRIVAL = case_when(nchar(ARRIVAL) == 11 ~ as.POSIXct(strptime(paste0("0", ARRIVAL), format = "%m%d%Y%H%M")),
-                              TRUE ~ as.POSIXct(strptime(ARRIVAL, format = "%m%d%Y%H%M"))),
-         LU_CLEAR = case_when(nchar(LU_CLEAR) == 11 ~ as.POSIXct(strptime(paste0("0", LU_CLEAR), format = "%m%d%Y%H%M")),
-                              TRUE ~ as.POSIXct(strptime(LU_CLEAR, format = "%m%d%Y%H%M"))))
-
-saveRDS(basic_incident_df_2, file = "./datasets/nfirs/rds/basicincident_2014.rds")
 
 
-incident_type_counts_df <- basic_incident_2017_df %>%
-  count(STATE, FDID, INC_TYPE, sort = TRUE)
 
-incident_counts_df <- basic_incident_2017_df %>%
-  count(STATE, FDID, sort = TRUE)
-  
-incident_type_counts_df <- inner_join(fd_df, incident_type_counts_df)
-incident_counts_df <- inner_join(fd_df, incident_counts_df)
 
-incident_type_counts_df <- incident_type_counts_df %>%
+#incident_type_counts_df <- basic_incident_df %>%
+#  group_by(STATE, FDID) %>%
+#  mutate(n_calls = n())
+
+incident_type_counts_df <- inner_join(fd_df, basic_incident_df %>%
+  count(STATE, FDID, INC_TYPE, sort = TRUE)) %>%
   select(state = STATE, fdid = FDID, name = Fire.dept.name, dept_type = Dept.Type, org_type = Organization.Type, 
          n_station = Number.Of.Stations, n_volunteer_ff = Active.Firefighters...Volunteer, n_career_ff = Active.Firefighters...Career, 
          n_ppc_ff = Active.Firefighters...Paid.per.Call, n_career_civ = Non.Firefighting...Civilian, n_volunteer_civ = Non.Firefighting...Volunteer,
-         primary_agency_for_emergency_mgmt = Primary.agency.for.emergency.mgmt, incident_type = INC_TYPE, n_calls = n)
+         primary_agency_for_emergency_mgmt = Primary.agency.for.emergency.mgmt, n_calls = n)
+
+
+
+incident_counts_df <- basic_incident_df %>%
+  count(STATE, FDID, sort = TRUE)
+  
+
+incident_counts_df <- inner_join(fd_df, incident_counts_df)
+
 
 incident_counts_df <- incident_counts_df %>%
   select(state = STATE, fdid = FDID, name = Fire.dept.name, dept_type = Dept.Type, org_type = Organization.Type, 
