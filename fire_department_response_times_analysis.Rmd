@@ -23,6 +23,7 @@ library("fst")
 library("foreign")
 library("foreach")
 library("doParallel")
+library("reshape2")
 ```
 
 ## Introduction:
@@ -198,13 +199,24 @@ ggplotly(density)
 
 
 
-
 #incident_type_counts_df <- basic_incident_df %>%
 #  group_by(STATE, FDID) %>%
 #  mutate(n_calls = n())
 
 incident_type_counts_df <- inner_join(fd_df, basic_incident_df %>%
-  count(STATE, FDID, INC_TYPE, sort = TRUE)) %>%
+  count(STATE, FDID, INC_TYPE, sort = TRUE)) 
+
+
+incident_type_counts_wide_df <- basic_incident_df %>% 
+  count(STATE, FDID, INC_TYPE, sort = TRUE) %>%
+  spread(INC_TYPE, n)
+  
+  dcast(STATE + FDID ~ INC_TYPE, value.var = "n")
+
+incident_type_counts_wide_df <- dcast(incident_type_counts_df, STATE + FDID ~ INC_TYPE, value.var = "n")
+
+
+
   select(state = STATE, fdid = FDID, name = Fire.dept.name, dept_type = Dept.Type, org_type = Organization.Type, 
          n_station = Number.Of.Stations, n_volunteer_ff = Active.Firefighters...Volunteer, n_career_ff = Active.Firefighters...Career, 
          n_ppc_ff = Active.Firefighters...Paid.per.Call, n_career_civ = Non.Firefighting...Civilian, n_volunteer_civ = Non.Firefighting...Volunteer,
