@@ -8,7 +8,7 @@ link_citations: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(include = FALSE)
 library("stringr")
 library("tools")
 library("tidyverse")
@@ -24,6 +24,9 @@ library("foreign")
 library("foreach")
 library("doParallel")
 library("reshape2")
+library("plyr")
+library("ggbiplot")
+library("psych")
 ```
 
 ## Introduction:
@@ -144,6 +147,8 @@ fd_df <- fread(file = "datasets/nfirs/fire_departments/usfa-registry-national.tx
 ccfes_df <- fd_df %>%
   filter(`Fire dept name` == "Cobb County Fire & Emergency Services")
 
+basic_incident_df <- fst::read.fst("./datasets/nfirs/fst/basicincident_dates_2014.fst")
+
 ```
 
 
@@ -153,7 +158,7 @@ ccfes_df <- fd_df %>%
 
 #basic_incident_df <- fst::read.fst("./datasets/nfirs/fst/basicincident_2014.fst")
 
-basic_incident_df <- fst::read.fst("./datasets/nfirs/fst/basicincident_dates_2014.fst")
+#basic_incident_df <- fst::read.fst("./datasets/nfirs/fst/basicincident_dates_2014.fst")
 
 #basic_incident_df$INC_DATE <- as.POSIXct(strptime(basic_incident_df$INC_DATE, format = "%m%d%Y"))
 #basic_incident_df$ALARM <- as.POSIXct(strptime(basic_incident_df$ALARM, format = "%m%d%Y%H%M"))
@@ -193,27 +198,199 @@ ggplotly(density)
 ```
 
 
-## Data Processing:
+## Create Wide Format Counts of Incident Types by Year:
+
+```{r}
+basic_incident_files <- c("./datasets/nfirs/fst/basicincident_2010.fst",
+                          "./datasets/nfirs/fst/basicincident_2011.fst",
+                          "./datasets/nfirs/fst/basicincident_2012.fst",
+                          "./datasets/nfirs/fst/basicincident_2013.fst",
+                          "./datasets/nfirs/fst/basicincident_2014.fst",
+                          "./datasets/nfirs/fst/basicincident_2015.fst",
+                          "./datasets/nfirs/fst/basicincident_2016.fst",
+                          "./datasets/nfirs/fst/basicincident_2017.fst",
+                          "./datasets/nfirs/fst/basicincident_2018.fst",
+                          "./datasets/nfirs/fst/basicincident_2019.fst",
+                          "./datasets/nfirs/fst/basicincident_2020.fst")
+
+basic_incident_years <- c("2010","2011","2012","2013","2014","2015","2016","2017","2018","2019","2020")
+
+wide_counts_df <- data.frame()
+
+for(i in 1:length(basic_incident_files)) {
+  df <- fst::read.fst(basic_incident_files[i])
+  print(paste0(basic_incident_years[[i]], " loaded. Counting and binding rows..."))
+  wide_counts_df <- rbind.fill(wide_counts_df, data.frame(df %>% 
+  dplyr::count(STATE, FDID, INC_TYPE, sort = TRUE) %>%
+  dcast(STATE + FDID ~ INC_TYPE, value.var = "n")) %>%
+    mutate(year = basic_incident_years[[i]]))
+}
+
+wide_counts_basic_df <- data.frame()
+i <- 1
+for(i in 1:length(basic_incident_files)) {
+  df <- fst::read.fst(basic_incident_files[i])
+  print(paste0(basic_incident_years[[i]], " loaded. Counting and binding rows..."))
+  wide_counts_basic_df <- rbind.fill(wide_counts_basic_df, data.frame(df %>% 
+  dplyr::count(STATE, FDID, sort = TRUE)) %>%
+    mutate(year = basic_incident_years[[i]]))
+}
+
+
+fst::write.fst(wide_counts_df, path = "./datasets/summaries/fst/counts_by_year_and_incident_type.fst")
+fst::write.fst(wide_counts_basic_df, path = "./datasets/summaries/fst/counts_by_year.fst")
+
+```
+
+
+
+Join Counts with Fire Department Info
 
 ```{r}
 
+fd_stats_df <- inner_join(fd_df %>%
+  dplyr::select(state = STATE, fdid = FDID, name = `Fire dept name`, dept_type = `Dept Type`, org_type = `Organization Type`, 
+         n_station = `Number Of Stations`, n_volunteer_ff = `Active Firefighters - Volunteer`, n_career_ff = `Active Firefighters - Career`, 
+         n_ppc_ff = `Active Firefighters - Paid per Call`, n_career_civ = `Non-Firefighting - Civilian`, n_volunteer_civ = `Non-Firefighting - Volunteer`,
+         primary_agency_for_emergency_mgmt = `Primary agency for emergency mgmt`), wide_counts_df %>% dplyr::rename(fdid = FDID, state = STATE)) %>%
+  relocate(year, state, fdid, name, primary_agency_for_emergency_mgmt)
 
 
-#incident_type_counts_df <- basic_incident_df %>%
-#  group_by(STATE, FDID) %>%
-#  mutate(n_calls = n())
+fd_stats_basic_df <- inner_join(fd_df %>%
+  dplyr::select(state = STATE, fdid = FDID, name = `Fire dept name`, dept_type = `Dept Type`, org_type = `Organization Type`, 
+         n_station = `Number Of Stations`, n_volunteer_ff = `Active Firefighters - Volunteer`, n_career_ff = `Active Firefighters - Career`, 
+         n_ppc_ff = `Active Firefighters - Paid per Call`, n_career_civ = `Non-Firefighting - Civilian`, n_volunteer_civ = `Non-Firefighting - Volunteer`,
+         primary_agency_for_emergency_mgmt = `Primary agency for emergency mgmt`), wide_counts_basic_df %>% dplyr::rename(fdid = FDID, state = STATE)) %>%
+  relocate(year, state, fdid, name, primary_agency_for_emergency_mgmt)
 
-incident_type_counts_df <- inner_join(fd_df, basic_incident_df %>%
-  count(STATE, FDID, INC_TYPE, sort = TRUE)) 
+
+fst::write.fst(fd_stats_df, path = "./datasets/summaries/fst/fire_dept_stats_by_year.fst")
+fst::write.fst(fd_stats_basic_df, path = "./datasets/summaries/fst/fire_dept_stats_by_year_basic.fst")
+
+```
 
 
-incident_type_counts_wide_df <- basic_incident_df %>% 
-  count(STATE, FDID, INC_TYPE, sort = TRUE) %>%
-  spread(INC_TYPE, n)
-  
-  dcast(STATE + FDID ~ INC_TYPE, value.var = "n")
 
-incident_type_counts_wide_df <- dcast(incident_type_counts_df, STATE + FDID ~ INC_TYPE, value.var = "n")
+
+Converting to Factors, Filling NAs
+
+```{r}
+
+fd_stats_df <- fd_stats_df %>%
+  mutate(dept_type = as.factor(dept_type),
+         org_type = as.factor(org_type),
+         primary_agency_for_emergency_mgmt = as.integer(as.logical(case_when(
+           primary_agency_for_emergency_mgmt == "Yes" ~ 1,
+           primary_agency_for_emergency_mgmt == "No" ~ 0,
+           TRUE ~ 0)))) %>%
+  replace(is.na(.), 0)
+
+
+fd_stats_basic_df <- fd_stats_basic_df %>%
+  mutate(dept_type = as.factor(dept_type),
+         org_type = as.factor(org_type),
+         primary_agency_for_emergency_mgmt = as.integer(as.logical(case_when(
+           primary_agency_for_emergency_mgmt == "Yes" ~ 1,
+           primary_agency_for_emergency_mgmt == "No" ~ 0,
+           TRUE ~ 0)))) %>%
+  replace(is.na(.), 0)
+
+```
+
+
+K-Means Clustering
+
+```{r}
+
+fd_basic_kmeans <- kmeans(fd_basic_pca_raw_df, centers = 6)
+
+fd_basic_kmeans
+
+wssplot <- function(data, nc=15, seed=123){
+               wss <- (nrow(data)-1)*sum(apply(data,2,var))
+               for (i in 2:nc){
+                    set.seed(seed)
+                    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
+                plot(1:nc, wss, type="b", xlab="Number of groups",
+                     ylab="Sum of squares within a group")}
+
+wssplot(fd_basic_pca_raw_df, nc = 20)
+
+```
+
+
+
+Principle Component Analysis
+
+```{r}
+
+fd_pca_raw_df <- fd_stats_df %>% filter(year == "2020") %>%
+  select(-year, -name,
+         -state, -fdid) %>%
+  mutate(dept_type = as.integer(dept_type),
+         org_type = as.integer(org_type)) %>%
+  select_if(function(v) var(v, na.rm=TRUE) != 0) 
+
+fd_basic_pca_raw_df <- fd_stats_basic_df %>% filter(year == "2020") %>%
+  select(-year, -name,
+         -state, -fdid) %>%
+  mutate(dept_type = as.integer(dept_type),
+         org_type = as.integer(org_type)) %>%
+  select_if(function(v) var(v, na.rm=TRUE) != 0) 
+
+fd_pca_scaled_df <- fd_pca_raw_df %>%
+  scale()
+
+fd_basic_pca_scaled_df <- fd_basic_pca_raw_df %>%
+  scale()
+
+#removing invariant data
+#fd_pca_raw_df <- fd_pca_raw_df[,apply(fd_pca_raw_df, 2, var, na.rm=TRUE) != 0]
+
+fd_pca_raw <- prcomp(fd_pca_raw_df, center = FALSE, scale. = FALSE)
+fd_pca_scaled <- prcomp(fd_pca_scaled_df, center = FALSE, scale. = FALSE)
+
+fd_basic_pca_scaled <- prcomp(fd_basic_pca_scaled_df, center = FALSE, scale. = FALSE)
+
+summary(fd_pca_raw)
+summary(fd_pca_scaled)
+summary(fd_basic_pca_scaled)
+
+str(fd_pca_raw)
+str(fd_pca_scaled)
+str(fd_basic_pca_scaled)
+
+print(fd_pca_scaled)
+print(fd_basic_pca_scaled)
+
+ggbiplot::ggbiplot(fd_pca_raw)
+ggbiplot::ggbiplot(fd_basic_pca_scaled)
+
+fd_pca_scaled$
+
+ggbiplot::ggbiplot(fd_pca_scaled, obs.scale = 1, var.scale = 1, var.axes=FALSE)
+ggbiplot::ggbiplot(fd_pca_scaled, choices = c(3, 4), obs.scale = 1, var.scale = 1)
+
+pairs.panels(fd_pca_raw_df)
+pairs.panels(fd_pca_scaled$x)
+
+g <- ggbiplot(fd_basic_pca_scaled,
+              obs.scale = 1,
+              var.scale = 1,
+              choices = c(3, 4),
+              ellipse = TRUE,
+              circle = TRUE,
+              ellipse.prob = 0.68)
+g <- g + scale_color_discrete(name = '')
+g <- g + theme(legend.direction = 'horizontal',
+               legend.position = 'top')
+ggplotly(g)
+
+```
+
+
+
+```{r}
 
 
 
