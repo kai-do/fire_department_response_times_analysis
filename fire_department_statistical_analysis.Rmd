@@ -1,0 +1,302 @@
+---
+title: "Fire Department Statistical Analysis"
+author: "Nakai Zemer"
+date: '2022-07-12'
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(scales)
+library(data.table)
+library(gt)
+library(dictionaRy)
+
+```
+
+## Introduction
+
+In this analysis, I demonstrate several basic statistical techniques and terminology on real data from the United States Fire Administration (USFA).
+
+### Libraries
+
+I use packages within the tidyverse (dplyr, ggplot2, stringr, etc.), scales (formatting), data.table (for fast data import via fread), gt (custom table graphics), and dictionaRy (an online dictionary API for one of my custom formatting functions).
+
+### Custom Functions
+
+I've created some functions to assist with cleaning up column names and formatting data more easily.
+
+```{r custom functions}
+
+clean_columns <- function(list) {
+  tolower(str_replace_all(list, "[. ]+", "_"))
+}
+
+title_columns <- function(list, capitalize_unknown = FALSE) {
+  clean_list <- str_replace_all(list, "[._]+", " ")
+  cased_list <- c()
+  if(capitalize_unknown) {
+      for(i in 1:length(clean_list)) {
+        split <- str_split(clean_list[i], " ", simplify = TRUE)
+        for (j in 1:length(split)) {
+          if(nrow(define(split[j])) > 0) {
+            split[j] <- str_to_title(split[j])
+          } else {
+            split[j] <- str_to_upper(split[j])
+          }
+        }
+        cased_list[i] <- paste(split, collapse = " ")
+      }
+    return(paste(cased_list))
+    } else {
+    return(str_to_title(clean_list))
+  }
+}
+
+sum_and_proportion_of_total <- function(x, total) {
+  sum_x <- sum(x, na.rm = TRUE)
+  prop_x <- format(round(sum(x, na.rm = TRUE)/total, digits = 4), scientific = FALSE)
+  if(prop_x == 0) {
+    paste0(sum_x, " (<", prop_x, ")", collapse = "")
+  } else {
+    paste0(sum_x, " (", prop_x, ")", collapse = "")
+  }
+}
+
+format_int_for_text <- function(x) {
+  format(round(as.integer(max(x)), 1), nsmall=0, big.mark=",")
+}
+
+format_freq_for_text <- function(x) {
+  round(as.numeric(x), digits = 4)
+}
+
+format_percent_for_text <- function(x) {
+  label_percent(accuracy = 0.01)(as.numeric(x))
+}
+
+```
+
+## Data Source
+### Sampling
+
+This data set was downloaded from the USFA national registry on 7/14/2022. The data is collected via survey from fire agencies within the United States on a volunteer basis. About this survey, the USFA says: "Today, the National Fire Department Registry provides a current directory of registered fire departments and includes basic information such as address, department type, website, and number of stations". 
+
+Because of the volunteer nature of the survey, it does not perfectly represent all fire agencies in the United States. The National Fire Department Registry Summary of January 2022 states that only about 91% (27,164) of fire departments are registered. This would imply a total of about 29,851 with 2,687 unregistered.
+
+In addition, because a survey was used for data collection, some results may not be valid due to user error. I'm unaware of the validation practices of the USFA, but I've sent them an email inquiring about them.
+
+### Data Set Preparation
+
+In the following code, I import the data set. I select only the relevant variables and adjust the remaining ones to the proper data types. No departments are excluded at this point in the analysis.
+
+```{r data import, message=FALSE, warning=FALSE}
+
+national_fire_departments_df <- fread("./datasets/nfirs/fire_departments/usfa-registry-national(2022-7-14).txt", 
+                                      sep = ",", quote = "\"", strip.white = TRUE, check.names = TRUE) %>%
+  rename_with(clean_columns)
+
+national_fire_departments_df <- national_fire_departments_df %>%
+  select(fdid, fire_dept_name, hq_city, hq_state, county, dept_type, organization_type, number_of_stations,
+         active_firefighters_career, active_firefighters_volunteer, active_firefighters_paid_per_call,
+         non_firefighting_civilian, non_firefighting_volunteer, primary_agency_for_emergency_mgmt) %>%
+  mutate(hq_state = factor(hq_state),
+         dept_type = factor(dept_type),
+         organization_type = factor(organization_type),
+         primary_agency_for_emergency_mgmt = as.logical(
+           case_when(primary_agency_for_emergency_mgmt == "Yes" ~ TRUE,
+                     primary_agency_for_emergency_mgmt == "No" ~ FALSE,
+                     TRUE ~ NA)))
+
+```
+
+
+## Summary Statistics
+### Summary Data Frame
+
+I create a new data frame from the last one in a wide format looking at counts of fire departments grouped by the department type and organization type. This data frame is nearly the same format as the more polished table I will create using gt.
+
+
+```{r summary data frame, message=FALSE, warning=FALSE}
+
+national_fire_departments_summary_df <- national_fire_departments_df %>%
+  group_by(dept_type, organization_type) %>%
+  summarise(n = n()) %>%
+  spread(dept_type, n) %>%
+  mutate(total = rowSums(across(where(is.numeric)), na.rm = TRUE),
+         freq = across(c(2:5), ~ ./sum(total, na.rm = TRUE)),
+         freq_total = total / sum(total, na.rm = TRUE),
+         grand_total = sum(total, na.rm = TRUE)) %>%
+  unnest(freq, names_sep = "_") %>%
+  arrange(desc(total))
+
+```
+
+### Relative Frequency Table
+
+Using the gt package, I create a relative frequency table from the summary data frame. This type of graphic is useful for quickly showing the counts, totals within groups, and relative frequency of occurrence. Next I will compute frequencies not explicitly shown in the table.
+
+```{r gt summary table}
+
+national_fire_departments_summary_df %>%
+  rename_with(title_columns) %>%
+  gt() %>%
+  tab_header(
+    
+    title = "U.S. Fire Department Statistics",
+    subtitle = md("Frequency Table   
+                  Data Source: United States Fire Administration (USFA) National Registry  
+                  [https://apps.usfa.fema.gov/registry/download](https://apps.usfa.fema.gov/registry/download)  
+                  Retrieved: 07/14/2022")
+    ) %>%
+  fmt_passthrough(
+    columns = c(1)
+    ) %>% 
+  fmt_integer(
+    columns = c(2:6,12)
+    ) %>%
+  fmt_number(
+    columns = c(7:11),
+    decimals = 4,
+    drop_trailing_zeros = TRUE
+    ) %>%
+  fmt_number(
+    columns = c(7:11),
+    pattern = case_when("{x}"=="0" ~ "<{x}",
+                        TRUE ~ "{x}")
+    ) %>%
+  cols_merge_n_pct(col_n = 2, col_pct = 7) %>%
+  cols_merge_n_pct(col_n = 3, col_pct = 8) %>%
+  cols_merge_n_pct(col_n = 4, col_pct = 9) %>%
+  cols_merge_n_pct(col_n = 5, col_pct = 10) %>%
+  cols_merge_n_pct(col_n = 6, col_pct = 11) %>%
+  grand_summary_rows(
+   columns = c(2:6),
+   fns = list(Total = ~sum_and_proportion_of_total(x = ., total = max(national_fire_departments_summary_df[,12]))),
+   formatter = fmt_passthrough,
+   missing_text = ""
+  ) %>%
+  tab_spanner(
+    label = "Department Type*",
+    columns = c(2:5)
+    ) %>%
+  tab_footnote (
+    footnote = md("*The percentage of career firefighters employed.  
+    Career: 100%, Mostly Career: 51%-99%, Mostly Volunteer 1%-50%, Volunteer: 0% (100% are volunteer)")
+  ) %>%
+  cols_hide(12) %>%
+  tab_style(
+    style = list(cell_fill(color = "#dddddd"),
+                 cell_borders(sides = "all",
+                              weight = 0)),
+    locations = list(cells_body(columns = c(6), rows = everything()),
+                     cells_grand_summary(rows = everything()))
+  ) %>%
+    tab_style(
+    style = list(cell_fill(color = "#ffffff"),
+                 cell_text(color = "#666666",
+                           weight = "bold"),
+                 cell_borders(sides = "all",
+                              weight = 0)),
+    locations = list(cells_stub(rows = everything()),
+                     cells_stubhead(),
+                     cells_stub_grand_summary(rows = everything()),
+                     cells_column_labels(columns = everything()),
+                     cells_stub(rows = everything()),
+                     cells_column_spanners(spanners = everything()))
+  ) %>%
+  tab_style(
+   style = cell_text(align = "center"),
+   locations = cells_column_labels(columns = everything())
+  )
+
+
+```
+
+```{r variables, message=FALSE, warning=FALSE, include=FALSE}
+
+n_local_career <- national_fire_departments_summary_df %>% 
+  filter(organization_type == "Local (includes career, combination, and volunteer fire departments and fire districts)") %>%
+  select(Career)
+
+freq_local_career <- national_fire_departments_summary_df %>% 
+  filter(organization_type == "Local (includes career, combination, and volunteer fire departments and fire districts)") %>%
+  select(freq_Career) %>%
+  format_freq_for_text()
+
+perc_local_career <- freq_local_career %>% format_percent_for_text()
+
+
+n_career <- sum(national_fire_departments_summary_df$Career, na.rm = TRUE)
+
+
+freq_local_given_career <- (n_local_career / n_career) %>% format_freq_for_text()
+
+perc_local_given_career <- freq_local_given_career %>% format_percent_for_text()
+
+
+n_local <- national_fire_departments_summary_df %>% 
+  filter(organization_type == "Local (includes career, combination, and volunteer fire departments and fire districts)") %>%
+  select(total) 
+
+freq_local <- national_fire_departments_summary_df %>% 
+  filter(organization_type == "Local (includes career, combination, and volunteer fire departments and fire districts)") %>%
+  select(freq_total) %>%
+  format_freq_for_text()
+
+perc_local <- freq_local %>% format_percent_for_text()
+  
+
+n_grand_total <- format(max(national_fire_departments_summary_df$grand_total), scientific = FALSE)
+
+```
+
+### Frequency and Probabilities 
+
+Using this frequency table, we can draw some conclusions about relative frequencies of different types of fire departments in the registry.
+
+From just looking at the chart, we can tell that the vast majority of departments are organized by local governments such as counties and cities. The rest are organized by private companies, transportation authorities, and state, tribal, and federal governments, among some others. 
+
+There are `r format_int_for_text(n_local)` departments that are local, which is `r perc_local` (`r freq_local`) of the total, `r format_int_for_text(n_grand_total)`. Of those local departments, `r format_int_for_text(n_local_career)` employ only career firefighters, which is actually only `r perc_local_career` (`r freq_local_career`) of the total. The most common type of fire departments are actually local departments employing 100% volunteer firefighters followed by mostly volunteer departments, fully career departments, and then mostly career departments (those that employ only a few volunteers).
+
+Let's also consider this fact: the classifications within the *Department Type* variable are mutually exclusive. Therefore, a single fire department can't be classified as both *career* and *volunteer*, or as all four types, or even as none of them (at least in this table). In addition, the classifications within the *Organization Type* are also mutually exclusive. A department is either *local*, *private*, *contract*, ***OR*** one of the other classifications.
+
+However, the variables *Department Type* and *Organization Type* are not mutually exclusive. A department can be both career and local.
+
+These statistics are easily found within the table, however, let's examine how we would use the table to answer a question like the following.
+
+***What frequency of career fire departments are local?***
+
+The total amount of departments, `r format_int_for_text(n_grand_total)` $(N=`r n_grand_total`)$, was used to calculate the above mentioned frequencies, but we don't need that to answer this question. We only need to look at the total number of career departments (`r format_int_for_text(n_career)`) and the subset of those that are local (`r format_int_for_text(n_local_career)`). $n(local)\in{career}$ 
+
+The following formula demonstrates how to calculate the relative frequency of "local given career".
+
+$$RF(local\ |\ career)=\frac{F(local\ and\ career)}{F(career)}$$
+This reads as "The relative frequency of local departments, given that they're career departments, is equal to the frequency of departments that are both local and career divided by the total frequency of career departments."
+
+$$RF(local\ |\ career)=\frac{`r n_local_career`}{`r n_career`}=`r freq_local_given_career`$$
+
+About `r perc_local_given_career` of career departments in the USFA's registry are organized by local governments.
+
+Here's some R code that computes the same answer, but we can use a calculator and the chart to quickly answer this question.
+
+```{r}
+
+national_fire_departments_summary_df %>% 
+  filter(organization_type == "Local (includes career, combination, and volunteer fire departments and fire districts)") %>%
+  select(Career) %>%
+  as.integer() / sum(national_fire_departments_summary_df$Career, na.rm = TRUE)
+
+```
+
+
+
+What about another, trickier question?
+
+***What proportion of fire departments are volunteer or local?***
+
+ 
+
+https://ctools.ece.utah.edu/Probability/ConditionalProb/DiscreteRandVars/ProbCondDiscreteDefs.pdf

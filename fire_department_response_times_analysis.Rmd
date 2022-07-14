@@ -9,6 +9,7 @@ link_citations: true
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(include = FALSE)
+library("plyr")
 library("stringr")
 library("tools")
 library("tidyverse")
@@ -24,9 +25,9 @@ library("foreign")
 library("foreach")
 library("doParallel")
 library("reshape2")
-library("plyr")
 library("ggbiplot")
 library("psych")
+library("gridExtra")
 ```
 
 ## Introduction:
@@ -296,6 +297,47 @@ fd_stats_basic_df <- fd_stats_basic_df %>%
   replace(is.na(.), 0)
 
 ```
+
+Averaging data over 2014-2020
+
+```{r}
+
+test_df <- fd_stats_basic_df %>%
+  filter(year %in% c("2014", "2015", "2016", "2017", "2018", "2019", "2020")) %>%
+  group_by(state, fdid, name, primary_agency_for_emergency_mgmt, dept_type, org_type, n_station, n_volunteer_ff, n_career_ff, n_ppc_ff, n_career_civ, n_volunteer_civ) %>%
+  dplyr::summarize(count = mean(n, na.rm = TRUE)) %>%
+  filter(org_type == "Local (includes career, combination, and volunteer fire departments and fire districts)") %>%
+  mutate(call_per_ff = count / (n_volunteer_ff + n_career_ff + n_ppc_ff))
+
+
+dept_type_plot <- ggplot(data = test_df, aes(x = factor(dept_type))) +
+  geom_bar(stat = "count")
+
+org_type_plot <- ggplot(data = test_df, aes(x = factor(org_type))) +
+  geom_bar(stat = "count")
+
+primary_ema_plot <- ggplot(data = test_df, aes(x = factor(primary_agency_for_emergency_mgmt))) +
+  geom_bar(stat = "count")
+
+grid.arrange(dept_type_plot, org_type_plot, primary_ema_plot)
+
+call_per_ff_boxplot <- ggplot(test_df, aes(x = dept_type, y = call_per_ff, color = dept_type, text = name)) +
+  geom_boxplot()
+
+ggplotly(call_per_ff_boxplot)
+
+```
+
+
+CCFES
+
+```{r}
+
+fd_stats_df %>%
+  filter(name == "Cobb County Fire & Emergency Services")
+
+```
+
 
 
 K-Means Clustering
